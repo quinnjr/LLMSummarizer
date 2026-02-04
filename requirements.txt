@@ -1,0 +1,15 @@
+# LLMSummarizer Plugin Dependencies
+# Local LLM summarization of pipeline findings using Ollama
+
+# Core data handling
+numpy>=1.24.0
+pandas>=2.0.0
+
+# LLM backend - Ollama
+ollama>=0.3.0
+
+# Optional but recommended: Better hardware detection
+psutil>=5.9.0
+
+# RAG with vector database (enabled by default)
+chromadb>=0.4.0

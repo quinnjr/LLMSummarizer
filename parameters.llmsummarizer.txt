@@ -1,0 +1,41 @@
+# LLMSummarizer Plugin Parameters
+# Uses Ollama for local LLM inference
+#
+# Prerequisites:
+#   1. Install Ollama: https://ollama.com
+#   2. The plugin will auto-start the server if needed
+#   3. Models are auto-downloaded if not available
+
+# Input files (from other pipeline steps)
+feature_importance	CSV/shap_feature_importance.csv
+cv_results	CSV/cv_results.csv
+# de_results	CSV/de_results.csv
+# cluster_results	CSV/clusters.csv
+# model_metrics	CSV/model_metrics.csv
+
+# Ollama model configuration
+# Set to "auto" or leave commented out for automatic hardware-based selection
+# The plugin will:
+#   1. Detect your CPU, RAM, and GPU (NVIDIA/AMD/Apple Silicon)
+#   2. Check which models are already downloaded
+#   3. Select the best model for your hardware
+#   4. Download it automatically if needed
+#
+# Manual options: llama3.1:70b, llama3.1:8b, llama3:8b, mistral:7b, 
+#                 phi3:medium, phi3:mini, gemma2:2b, tinyllama:1.1b
+model_name	auto
+
+# Generation parameters
+temperature	0.3
+max_tokens	1024
+
+# RAG (Retrieval-Augmented Generation) settings
+# The database will be auto-downloaded from GitHub if not present
+use_rag	true
+literature_db	data/pd_literature_db
+
+# Auto-download RAG database from GitHub releases if not present
+rag_auto_download	true
+
+# GitHub repo for RAG database (auto-detected from git remote if not set)
+# rag_repo	owner/LLMSummarizer

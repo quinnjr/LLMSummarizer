@@ -1,0 +1,10 @@
+# RAG Database Builder Dependencies
+
+# Vector database
+chromadb>=0.4.0
+
+# LLM for finding extraction
+ollama>=0.3.0
+
+# Optional: Better embeddings (uses default ChromaDB embeddings if not installed)
+# sentence-transformers>=2.2.0

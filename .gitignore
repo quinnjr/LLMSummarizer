@@ -45,14 +45,12 @@ htmlcov/
 .nox/
 
 # Data and outputs
-*.csv
-*.tsv
-*.json
-*.txt
-*.md
-CSV/
 output/
-dist/
+
+# Exclude requirements and parameters from ignore
+!requirements*.txt
+!parameters*.txt
+!scripts/requirements*.txt
 
 # ChromaDB / RAG database
 data/
