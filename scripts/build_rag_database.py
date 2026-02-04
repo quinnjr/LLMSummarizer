@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-PD Literature RAG Database Builder
+Literature RAG Database Builder
 
-Scrapes publicly available Parkinson's disease research from PubMed Central
-Open Access subset, extracts key findings using LLM, and builds a ChromaDB
-vector database for RAG-enhanced summarization.
+Scrapes publicly available research from PubMed Central Open Access subset,
+extracts key findings using LLM, and builds a ChromaDB vector database for
+RAG-enhanced summarization.
+
+Supports multiple research domains:
+- Parkinson's disease
+- Alzheimer's disease
+- Cancer
+- Microbiome
+- Custom domains
 
 Data Sources:
 - PubMed Central Open Access Subset (freely redistributable)
@@ -45,6 +52,86 @@ try:
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
+
+
+# =============================================================================
+# Domain Configurations
+# =============================================================================
+
+DOMAIN_CONFIGS = {
+    "parkinsons": {
+        "name": "Parkinson's Disease",
+        "collection_name": "pd_findings",
+        "db_path": "data/pd_literature_db",
+        "search_queries": [
+            # Core PD research
+            '"Parkinson disease"[MeSH] AND "biomarker"[tiab]',
+            '"Parkinson disease"[MeSH] AND ("gut microbiome"[tiab] OR "microbiota"[tiab])',
+            '"Parkinson disease"[MeSH] AND ("alpha-synuclein"[tiab] OR "SNCA"[tiab])',
+            # Genetics
+            '"Parkinson disease"[MeSH] AND ("LRRK2"[tiab] OR "GBA"[tiab] OR "genetic"[tiab])',
+            # Transcriptomics
+            '"Parkinson disease"[MeSH] AND ("transcriptom"[tiab] OR "RNA-seq"[tiab] OR "gene expression"[tiab])',
+            # Metabolomics
+            '"Parkinson disease"[MeSH] AND ("metabolom"[tiab] OR "metabolite"[tiab])',
+        ],
+        "finding_types": ["biomarker", "mechanism", "clinical", "microbiome", "genetic", "therapeutic"],
+    },
+    "alzheimers": {
+        "name": "Alzheimer's Disease",
+        "collection_name": "ad_findings",
+        "db_path": "data/ad_literature_db",
+        "search_queries": [
+            # Core AD research
+            '"Alzheimer disease"[MeSH] AND "biomarker"[tiab]',
+            '"Alzheimer disease"[MeSH] AND ("amyloid"[tiab] OR "amyloid beta"[tiab])',
+            '"Alzheimer disease"[MeSH] AND ("tau protein"[tiab] OR "neurofibrillary"[tiab])',
+            # Genetics
+            '"Alzheimer disease"[MeSH] AND ("APOE"[tiab] OR "genetic risk"[tiab])',
+            # Transcriptomics
+            '"Alzheimer disease"[MeSH] AND ("transcriptom"[tiab] OR "RNA-seq"[tiab] OR "gene expression"[tiab])',
+            # Neuroinflammation
+            '"Alzheimer disease"[MeSH] AND ("neuroinflammation"[tiab] OR "microglia"[tiab])',
+        ],
+        "finding_types": ["biomarker", "mechanism", "clinical", "genetic", "therapeutic", "imaging"],
+    },
+    "cancer": {
+        "name": "Cancer",
+        "collection_name": "cancer_findings",
+        "db_path": "data/cancer_literature_db",
+        "search_queries": [
+            # Multi-omics cancer
+            '"Neoplasms"[MeSH] AND "multi-omics"[tiab]',
+            '"Neoplasms"[MeSH] AND "biomarker"[tiab] AND "genomics"[tiab]',
+            '"Neoplasms"[MeSH] AND ("tumor microenvironment"[tiab] OR "immune infiltration"[tiab])',
+            # Transcriptomics
+            '"Neoplasms"[MeSH] AND ("transcriptom"[tiab] OR "RNA-seq"[tiab]) AND "biomarker"[tiab]',
+            # Mutations
+            '"Neoplasms"[MeSH] AND ("driver mutation"[tiab] OR "somatic mutation"[tiab])',
+            # Proteomics
+            '"Neoplasms"[MeSH] AND "proteomics"[tiab] AND "biomarker"[tiab]',
+        ],
+        "finding_types": ["biomarker", "mutation", "therapeutic", "diagnostic", "prognostic", "immune"],
+    },
+    "microbiome": {
+        "name": "Microbiome",
+        "collection_name": "microbiome_findings",
+        "db_path": "data/microbiome_literature_db",
+        "search_queries": [
+            # General microbiome
+            '"gastrointestinal microbiome"[MeSH] AND "biomarker"[tiab]',
+            '"gastrointestinal microbiome"[MeSH] AND "dysbiosis"[tiab]',
+            '"gastrointestinal microbiome"[MeSH] AND ("metabolomics"[tiab] OR "metabolite"[tiab])',
+            # Host interactions
+            '"gastrointestinal microbiome"[MeSH] AND ("host-microbiome"[tiab] OR "immune"[tiab])',
+            # Multi-omics
+            '"gastrointestinal microbiome"[MeSH] AND ("metagenom"[tiab] OR "16S"[tiab])',
+            # Disease associations
+            '"gastrointestinal microbiome"[MeSH] AND "disease"[tiab] AND "association"[tiab]',
+        ],
+        "finding_types": ["biomarker", "dysbiosis", "metabolite", "host-interaction", "therapeutic", "mechanism"],
+    },
+}
 
 
 # =============================================================================
@@ -536,33 +623,41 @@ JSON findings:"""
 class RAGDatabaseBuilder:
     """Builds and manages the ChromaDB RAG database."""
     
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, collection_name: str = "findings", domain_name: str = "research"):
         """
         Initialize database builder.
         
         Args:
             db_path: Path to ChromaDB database directory
+            collection_name: Name for the findings collection
+            domain_name: Human-readable domain name for metadata
         """
         if not CHROMADB_AVAILABLE:
             raise ImportError("chromadb is required: pip install chromadb")
         
         self.db_path = Path(db_path)
         self.db_path.mkdir(parents=True, exist_ok=True)
+        self.collection_name = collection_name
+        self.domain_name = domain_name
         
         self.client = chromadb.PersistentClient(
             path=str(self.db_path),
             settings=Settings(anonymized_telemetry=False)
         )
         
-        # Create collections
+        # Create collections with domain-specific names
+        papers_collection_name = collection_name.replace("_findings", "_papers").replace("findings", "papers")
+        if not papers_collection_name.endswith("_papers"):
+            papers_collection_name = f"{collection_name}_papers"
+        
         self.papers_collection = self.client.get_or_create_collection(
-            name="pd_papers",
-            metadata={"description": "Parkinson's disease research papers"}
+            name=papers_collection_name,
+            metadata={"description": f"{domain_name} research papers"}
         )
         
         self.findings_collection = self.client.get_or_create_collection(
-            name="pd_findings",
-            metadata={"description": "Curated findings from PD research"}
+            name=collection_name,
+            metadata={"description": f"Curated findings from {domain_name} research"}
         )
     
     def add_paper(self, paper: Paper) -> None:
@@ -660,54 +755,64 @@ class RAGDatabaseBuilder:
 # Main Scraper Pipeline
 # =============================================================================
 
-def build_pd_database(
-    output_dir: str,
+def build_database(
+    domain: str,
+    output_dir: str | None,
     email: str,
     api_key: str | None = None,
     max_papers: int = 500,
     min_year: int = 2015,
     llm_model: str = "llama3",
     fetch_fulltext: bool = False,
+    custom_queries: list[str] | None = None,
 ) -> None:
     """
-    Build the Parkinson's disease RAG database.
+    Build a domain-specific RAG database.
     
     Args:
-        output_dir: Directory for ChromaDB database
+        domain: Research domain (parkinsons, alzheimers, cancer, microbiome)
+        output_dir: Directory for ChromaDB database (uses domain default if None)
         email: Email for PubMed API
         api_key: Optional PubMed API key
         max_papers: Maximum number of papers to fetch
         min_year: Minimum publication year
         llm_model: Ollama model for finding extraction
         fetch_fulltext: Whether to fetch full text from PMC
+        custom_queries: Custom PubMed queries (overrides domain defaults)
     """
+    # Get domain configuration
+    if domain not in DOMAIN_CONFIGS:
+        print(f"Error: Unknown domain '{domain}'")
+        print(f"Available domains: {', '.join(DOMAIN_CONFIGS.keys())}")
+        sys.exit(1)
+    
+    config = DOMAIN_CONFIGS[domain]
+    domain_name = config["name"]
+    
+    # Use default output directory if not specified
+    if output_dir is None:
+        output_dir = config["db_path"]
+    
+    # Use custom queries or domain defaults
+    search_queries = custom_queries if custom_queries else config["search_queries"]
+    
     print("=" * 60)
-    print("PD Literature RAG Database Builder")
+    print(f"{domain_name} Literature RAG Database Builder")
     print("=" * 60)
     
     # Initialize components
     pubmed = PubMedClient(email=email, api_key=api_key)
     extractor = FindingExtractor(model=llm_model)
-    db = RAGDatabaseBuilder(output_dir)
-    
-    # Define search queries for comprehensive coverage
-    search_queries = [
-        # Microbiome-related
-        '"Parkinson disease"[MeSH] AND ("gut microbiome"[tiab] OR "microbiota"[tiab] OR "gut-brain"[tiab])',
-        # Biomarkers
-        '"Parkinson disease"[MeSH] AND ("biomarker"[tiab] OR "alpha-synuclein"[tiab])',
-        # Genetics
-        '"Parkinson disease"[MeSH] AND ("LRRK2"[tiab] OR "SNCA"[tiab] OR "GBA"[tiab] OR "genetic"[tiab])',
-        # Transcriptomics
-        '"Parkinson disease"[MeSH] AND ("transcriptom"[tiab] OR "RNA-seq"[tiab] OR "gene expression"[tiab])',
-        # Metabolomics
-        '"Parkinson disease"[MeSH] AND ("metabolom"[tiab] OR "metabolite"[tiab])',
-    ]
+    db = RAGDatabaseBuilder(
+        output_dir, 
+        collection_name=config["collection_name"],
+        domain_name=domain_name
+    )
     
     all_pmids = set()
     
     # Search for papers
-    print(f"\n[1/4] Searching PubMed for Parkinson's disease research...")
+    print(f"\n[1/4] Searching PubMed for {domain_name} research...")
     
     for query in search_queries:
         print(f"  Query: {query[:60]}...")
@@ -770,6 +875,9 @@ def build_pd_database(
     # Save metadata
     metadata = {
         "created": datetime.now().isoformat(),
+        "domain": domain,
+        "domain_name": domain_name,
+        "collection_name": config["collection_name"],
         "papers_count": stats["papers"],
         "findings_count": stats["findings"],
         "min_year": min_year,
@@ -801,29 +909,45 @@ def build_pd_database(
 
 def main():
     """Main entry point."""
+    available_domains = ", ".join(DOMAIN_CONFIGS.keys())
+    
     parser = argparse.ArgumentParser(
-        description="Build Parkinson's disease literature RAG database",
+        description="Build literature RAG database for various research domains",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+Available domains: {available_domains}
+
 Examples:
-  # Basic usage (requires email for PubMed)
-  python build_rag_database.py --email your@email.com
+  # Build Parkinson's disease database
+  python build_rag_database.py --domain parkinsons --email your@email.com
+  
+  # Build Alzheimer's disease database
+  python build_rag_database.py --domain alzheimers --email your@email.com
+  
+  # Build cancer database with more papers
+  python build_rag_database.py --domain cancer --email your@email.com --max-papers 1000
   
   # With API key for faster downloads
-  python build_rag_database.py --email your@email.com --api-key YOUR_KEY
+  python build_rag_database.py --domain parkinsons --email your@email.com --api-key YOUR_KEY
   
-  # Custom options
-  python build_rag_database.py --email your@email.com --max-papers 1000 --min-year 2018
+  # Custom output directory
+  python build_rag_database.py --domain parkinsons --email your@email.com --output my_db/
   
   # Include full text from Open Access papers
-  python build_rag_database.py --email your@email.com --fetch-fulltext
+  python build_rag_database.py --domain parkinsons --email your@email.com --fetch-fulltext
         """
     )
     
     parser.add_argument(
+        "--domain", "-d",
+        default="parkinsons",
+        choices=list(DOMAIN_CONFIGS.keys()),
+        help=f"Research domain ({available_domains}). Default: parkinsons"
+    )
+    parser.add_argument(
         "--output", "-o",
-        default="data/pd_literature_db",
-        help="Output directory for ChromaDB database (default: data/pd_literature_db)"
+        default=None,
+        help="Output directory for ChromaDB database (uses domain default if not specified)"
     )
     parser.add_argument(
         "--email", "-e",
@@ -867,7 +991,8 @@ Examples:
     if not OLLAMA_AVAILABLE:
         print("Warning: ollama not available. Using simple heuristic extraction.")
     
-    build_pd_database(
+    build_database(
+        domain=args.domain,
         output_dir=args.output,
         email=args.email,
         api_key=args.api_key,
