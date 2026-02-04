@@ -1,16 +1,18 @@
 """
 LLMSummarizer PluMA Plugin
 
-Local LLM-based summarization of pipeline findings for Parkinson's disease
-multi-omics analysis.
+Local LLM-based summarization of pipeline findings for multi-omics analysis.
 
 This plugin uses locally-hosted large language models to:
 1. Generate natural language summaries of statistical results
 2. Interpret feature importance rankings in biological context
 3. Compare integration method performance
-4. Optionally contextualize findings with PD literature (RAG)
+4. Optionally contextualize findings with domain-specific literature (RAG)
 
-Uses local models via Ollama or llama-cpp-python for data privacy.
+Supports configurable research domains (Parkinson's, Alzheimer's, cancer, etc.)
+with pre-built configurations and customizable RAG databases.
+
+Uses local models via Ollama for data privacy.
 
 Author: Joseph R. Quinn <quinn.josephr@protonmail.com>
 License: MIT
@@ -24,12 +26,130 @@ import platform
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+
+@dataclass
+class DomainConfig:
+    """Configuration for a specific research domain."""
+    
+    # Domain identification
+    name: str
+    display_name: str
+    description: str
+    
+    # RAG database settings
+    rag_collection_name: str
+    rag_db_path: str
+    rag_db_archive_pattern: str  # Pattern to match in GitHub releases
+    
+    # Prompt customization
+    expert_role: str  # e.g., "neurology expert", "oncologist"
+    research_focus: str  # e.g., "biomarker discovery", "treatment response"
+    
+    # Key term extraction patterns
+    context_queries: list[str] = field(default_factory=list)
+    feature_suffix: str = ""  # Appended to feature names in RAG queries
+    
+    # Output customization
+    summary_title: str = "Multi-Omics Analysis Summary"
+    summary_subtitle: str = "Biomarker Discovery"
+
+
+# Pre-defined domain configurations
+DOMAIN_CONFIGS: dict[str, DomainConfig] = {
+    "parkinsons": DomainConfig(
+        name="parkinsons",
+        display_name="Parkinson's Disease",
+        description="Parkinson's disease multi-omics analysis",
+        rag_collection_name="pd_findings",
+        rag_db_path="data/pd_literature_db",
+        rag_db_archive_pattern="pd_literature_db",
+        expert_role="bioinformatics expert specializing in Parkinson's disease research",
+        research_focus="identifying biomarkers and understanding disease mechanisms",
+        context_queries=[
+            "gut microbiome Parkinson's disease biomarker",
+            "alpha-synuclein gut-brain axis",
+            "Parkinson's disease transcriptomics gene expression",
+        ],
+        feature_suffix="Parkinson's disease",
+        summary_title="Multi-Omics Analysis Summary",
+        summary_subtitle="Parkinson's Disease Biomarker Discovery",
+    ),
+    "alzheimers": DomainConfig(
+        name="alzheimers",
+        display_name="Alzheimer's Disease",
+        description="Alzheimer's disease multi-omics analysis",
+        rag_collection_name="ad_findings",
+        rag_db_path="data/ad_literature_db",
+        rag_db_archive_pattern="ad_literature_db",
+        expert_role="bioinformatics expert specializing in Alzheimer's disease research",
+        research_focus="identifying biomarkers and understanding neurodegeneration",
+        context_queries=[
+            "amyloid beta Alzheimer's disease biomarker",
+            "tau protein neurodegeneration",
+            "Alzheimer's disease transcriptomics gene expression",
+        ],
+        feature_suffix="Alzheimer's disease",
+        summary_title="Multi-Omics Analysis Summary",
+        summary_subtitle="Alzheimer's Disease Biomarker Discovery",
+    ),
+    "cancer": DomainConfig(
+        name="cancer",
+        display_name="Cancer",
+        description="Cancer multi-omics analysis",
+        rag_collection_name="cancer_findings",
+        rag_db_path="data/cancer_literature_db",
+        rag_db_archive_pattern="cancer_literature_db",
+        expert_role="bioinformatics expert specializing in cancer genomics",
+        research_focus="identifying tumor biomarkers and therapeutic targets",
+        context_queries=[
+            "cancer driver mutation biomarker",
+            "tumor microenvironment immunotherapy",
+            "cancer transcriptomics gene expression signature",
+        ],
+        feature_suffix="cancer",
+        summary_title="Multi-Omics Analysis Summary",
+        summary_subtitle="Cancer Biomarker Discovery",
+    ),
+    "microbiome": DomainConfig(
+        name="microbiome",
+        display_name="Microbiome",
+        description="Microbiome multi-omics analysis",
+        rag_collection_name="microbiome_findings",
+        rag_db_path="data/microbiome_literature_db",
+        rag_db_archive_pattern="microbiome_literature_db",
+        expert_role="bioinformatics expert specializing in microbiome research",
+        research_focus="understanding microbial community dynamics and host interactions",
+        context_queries=[
+            "gut microbiome dysbiosis biomarker",
+            "microbiome metabolomics short-chain fatty acids",
+            "host-microbiome interaction immune response",
+        ],
+        feature_suffix="microbiome",
+        summary_title="Multi-Omics Analysis Summary",
+        summary_subtitle="Microbiome Analysis",
+    ),
+    "generic": DomainConfig(
+        name="generic",
+        display_name="Generic Analysis",
+        description="Multi-omics analysis",
+        rag_collection_name="findings",
+        rag_db_path="data/literature_db",
+        rag_db_archive_pattern="literature_db",
+        expert_role="bioinformatics expert",
+        research_focus="identifying significant biological patterns",
+        context_queries=[],
+        feature_suffix="",
+        summary_title="Multi-Omics Analysis Summary",
+        summary_subtitle="Biomarker Discovery",
+    ),
+}
 
 
 @dataclass
@@ -133,6 +253,9 @@ class LLMSummarizer:
     Generates human-readable summaries of multi-omics analysis findings
     using locally-hosted language models, ensuring data privacy.
     
+    Supports multiple research domains (Parkinson's, Alzheimer's, cancer, etc.)
+    with domain-specific prompts and RAG databases.
+    
     Parameters (via input file):
         feature_importance: Path to SHAP feature importance CSV
         cv_results: Path to cross-validation results CSV
@@ -140,14 +263,24 @@ class LLMSummarizer:
         cluster_results: Path to clustering results CSV
         model_metrics: Path to model evaluation metrics CSV
         
+        domain: Research domain (parkinsons, alzheimers, cancer, microbiome, generic)
+                Default: generic. Use 'custom' with custom_domain_* params for custom domains.
+        
         model_name: Ollama model identifier (e.g., "llama3", "mistral", "phi3")
         temperature: Sampling temperature (default: 0.3)
         max_tokens: Maximum tokens in response (default: 1024)
         
         use_rag: Enable retrieval-augmented generation (default: true)
-        literature_db: Path to literature vector database (for RAG)
+        literature_db: Path to literature vector database (overrides domain default)
+        rag_collection: Collection name in database (overrides domain default)
         rag_auto_download: Auto-download database from GitHub if missing (default: true)
         rag_repo: GitHub repo for RAG database (auto-detected if not set)
+        
+        Custom domain parameters (when domain=custom):
+            custom_domain_name: Display name for the domain
+            custom_domain_expert_role: Expert role for prompts
+            custom_domain_research_focus: Research focus description
+            custom_domain_feature_suffix: Suffix for feature RAG queries
     
     Prerequisites:
         1. Install Ollama: https://ollama.com
@@ -158,6 +291,14 @@ class LLMSummarizer:
         - Natural language summary (text and markdown)
         - Structured findings JSON
         - Key takeaways for clinical/research audiences
+    
+    Available Domains:
+        - parkinsons: Parkinson's disease research
+        - alzheimers: Alzheimer's disease research
+        - cancer: Cancer genomics
+        - microbiome: Microbiome analysis
+        - generic: General multi-omics (no domain-specific context)
+        - custom: User-defined domain configuration
     """
     
     def __init__(self) -> None:
@@ -182,12 +323,17 @@ class LLMSummarizer:
         # Hardware info (populated during initialization)
         self.hardware_info: HardwareInfo | None = None
         
+        # Domain configuration (default to generic)
+        self.domain: str = "generic"
+        self.domain_config: DomainConfig = DOMAIN_CONFIGS["generic"]
+        
         # Default parameters (model_name=None triggers auto-selection)
         self.model_name: str | None = None
         self.temperature: float = 0.3
         self.max_tokens: int = 1024
         self.use_rag: bool = True
-        self.literature_db: str | None = "data/pd_literature_db"
+        self.literature_db: str | None = None  # Will use domain default if not set
+        self.rag_collection: str | None = None  # Will use domain default if not set
         self.rag_repo: str | None = None  # GitHub repo for RAG database (owner/repo)
         self.rag_auto_download: bool = True  # Auto-download RAG database if missing
     
@@ -247,14 +393,85 @@ class LLMSummarizer:
         if "use_rag" in self.parameters:
             self.use_rag = self.parameters["use_rag"].lower() == "true"
         
-        if "literature_db" in self.parameters:
-            self.literature_db = self.parameters["literature_db"]
-        
         if "rag_repo" in self.parameters:
             self.rag_repo = self.parameters["rag_repo"]
         
         if "rag_auto_download" in self.parameters:
             self.rag_auto_download = self.parameters["rag_auto_download"].lower() == "true"
+        
+        # Parse domain configuration
+        self._configure_domain()
+        
+        # Override domain defaults with explicit parameters (after domain is set)
+        if "literature_db" in self.parameters:
+            self.literature_db = self.parameters["literature_db"]
+        
+        if "rag_collection" in self.parameters:
+            self.rag_collection = self.parameters["rag_collection"]
+    
+    def _configure_domain(self) -> None:
+        """
+        Configure domain-specific settings based on parameters.
+        
+        Handles built-in domains and custom domain configuration.
+        """
+        if "domain" in self.parameters:
+            self.domain = self.parameters["domain"].lower().strip()
+        
+        if self.domain == "custom":
+            # Build custom domain configuration
+            self.domain_config = DomainConfig(
+                name="custom",
+                display_name=self.parameters.get(
+                    "custom_domain_name", "Custom Analysis"
+                ),
+                description=self.parameters.get(
+                    "custom_domain_description", "Custom multi-omics analysis"
+                ),
+                rag_collection_name=self.parameters.get(
+                    "custom_domain_collection", "findings"
+                ),
+                rag_db_path=self.parameters.get(
+                    "custom_domain_db_path", "data/literature_db"
+                ),
+                rag_db_archive_pattern=self.parameters.get(
+                    "custom_domain_archive_pattern", "literature_db"
+                ),
+                expert_role=self.parameters.get(
+                    "custom_domain_expert_role", "bioinformatics expert"
+                ),
+                research_focus=self.parameters.get(
+                    "custom_domain_research_focus", 
+                    "identifying significant biological patterns"
+                ),
+                context_queries=self.parameters.get(
+                    "custom_domain_context_queries", ""
+                ).split(",") if self.parameters.get("custom_domain_context_queries") else [],
+                feature_suffix=self.parameters.get(
+                    "custom_domain_feature_suffix", ""
+                ),
+                summary_title=self.parameters.get(
+                    "custom_domain_summary_title", "Multi-Omics Analysis Summary"
+                ),
+                summary_subtitle=self.parameters.get(
+                    "custom_domain_summary_subtitle", "Biomarker Discovery"
+                ),
+            )
+        elif self.domain in DOMAIN_CONFIGS:
+            self.domain_config = DOMAIN_CONFIGS[self.domain]
+        else:
+            print(f"Warning: Unknown domain '{self.domain}', using 'generic'")
+            self.domain = "generic"
+            self.domain_config = DOMAIN_CONFIGS["generic"]
+        
+        # Set defaults from domain config if not explicitly specified
+        if self.literature_db is None:
+            self.literature_db = self.domain_config.rag_db_path
+        
+        if self.rag_collection is None:
+            self.rag_collection = self.domain_config.rag_collection_name
+        
+        print(f"Domain: {self.domain_config.display_name}")
     
     def run(self) -> None:
         """
@@ -811,7 +1028,7 @@ class LLMSummarizer:
             Dictionary with summarized results for LLM context
         """
         context = {
-            "analysis_type": "Multi-omics integration for Parkinson's disease",
+            "analysis_type": self.domain_config.description,
             "sections": []
         }
         
@@ -926,8 +1143,8 @@ class LLMSummarizer:
         Returns:
             Formatted prompt string
         """
-        prompt = """You are a bioinformatics expert summarizing multi-omics analysis results 
-for Parkinson's disease research. Generate a clear, scientifically accurate summary 
+        prompt = f"""You are a {self.domain_config.expert_role} summarizing multi-omics analysis results 
+focused on {self.domain_config.research_focus}. Generate a clear, scientifically accurate summary 
 of the following analysis results. Focus on:
 1. Key findings and their biological significance
 2. Most important features from each data modality
@@ -935,6 +1152,8 @@ of the following analysis results. Focus on:
 4. Potential clinical or research implications
 
 Be precise with statistics but explain them in accessible terms.
+
+Research Context: {self.domain_config.description}
 
 ANALYSIS RESULTS:
 """
@@ -1159,11 +1378,12 @@ Focus on:
             archive_asset = None
             checksum_asset = None
             
+            archive_pattern = self.domain_config.rag_db_archive_pattern
             for asset in assets:
                 name = asset.get("name", "")
-                if name.endswith(".tar.gz") and "pd_literature_db" in name:
+                if name.endswith(".tar.gz") and archive_pattern in name:
                     archive_asset = asset
-                elif name.endswith(".sha256"):
+                elif name.endswith(".sha256") and archive_pattern in name:
                     checksum_asset = asset
             
             if not archive_asset:
@@ -1333,10 +1553,11 @@ Focus on:
             )
             
             # Query the findings collection
+            collection_name = self.rag_collection or self.domain_config.rag_collection_name
             try:
-                findings_collection = client.get_collection("pd_findings")
+                findings_collection = client.get_collection(collection_name)
             except Exception:
-                print("Warning: pd_findings collection not found in database")
+                print(f"Warning: '{collection_name}' collection not found in database")
                 return summary
             
             # Extract key terms from summary for retrieval
@@ -1405,6 +1626,7 @@ Focus on:
         import re
         
         key_terms = []
+        feature_suffix = self.domain_config.feature_suffix
         
         # Extract from feature importance if available
         if self.feature_importance is not None:
@@ -1414,7 +1636,10 @@ Focus on:
                 # Remove modality prefix (MG_, TX_)
                 clean_name = re.sub(r'^(MG_|TX_|PT_|MT_)', '', str(feature_name))
                 if clean_name:
-                    key_terms.append(f"{clean_name} Parkinson's disease")
+                    if feature_suffix:
+                        key_terms.append(f"{clean_name} {feature_suffix}")
+                    else:
+                        key_terms.append(clean_name)
         
         # Look for gene/protein names in text (typically uppercase)
         gene_pattern = r'\b([A-Z][A-Z0-9]{2,}[a-z]*)\b'
@@ -1423,21 +1648,21 @@ Focus on:
         skip_words = {"THE", "AND", "FOR", "WITH", "FROM", "THAT", "THIS", "ARE", "WAS", "RNA", "DNA"}
         genes = [g for g in genes if g not in skip_words]
         for gene in genes[:5]:
-            key_terms.append(f"{gene} Parkinson's disease")
+            if feature_suffix:
+                key_terms.append(f"{gene} {feature_suffix}")
+            else:
+                key_terms.append(gene)
         
         # Look for bacterial taxa names (genus names typically capitalized)
         taxa_pattern = r'\b([A-Z][a-z]+(?:aceae|ales|ota|coccus|bacillus|bacterium)?)\b'
         taxa = re.findall(taxa_pattern, text)
         for taxon in taxa[:3]:
             if len(taxon) > 4:  # Filter short matches
-                key_terms.append(f"{taxon} gut microbiome")
+                key_terms.append(f"{taxon} microbiome")
         
-        # Add general context queries
-        key_terms.extend([
-            "gut microbiome Parkinson's disease biomarker",
-            "alpha-synuclein gut-brain axis",
-            "Parkinson's disease transcriptomics gene expression",
-        ])
+        # Add domain-specific context queries
+        if self.domain_config.context_queries:
+            key_terms.extend(self.domain_config.context_queries)
         
         # Remove duplicates while preserving order
         seen = set()
@@ -1456,8 +1681,8 @@ Focus on:
         Returns:
             Markdown-formatted summary
         """
-        md = "# Multi-Omics Analysis Summary\n\n"
-        md += "## Parkinson's Disease Biomarker Discovery\n\n"
+        md = f"# {self.domain_config.summary_title}\n\n"
+        md += f"## {self.domain_config.summary_subtitle}\n\n"
         
         md += self.summary_text
         

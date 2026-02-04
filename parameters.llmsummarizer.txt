@@ -13,7 +13,39 @@ cv_results	CSV/cv_results.csv
 # cluster_results	CSV/clusters.csv
 # model_metrics	CSV/model_metrics.csv
 
-# Ollama model configuration
+# ============================================================================
+# DOMAIN CONFIGURATION
+# ============================================================================
+# Research domain for context-specific prompts and RAG database
+# Available built-in domains:
+#   - parkinsons  : Parkinson's disease research
+#   - alzheimers  : Alzheimer's disease research
+#   - cancer      : Cancer genomics
+#   - microbiome  : Microbiome analysis
+#   - generic     : General multi-omics (no domain-specific context)
+#   - custom      : User-defined domain (see custom_domain_* parameters below)
+#
+# Default: generic
+domain	parkinsons
+
+# ============================================================================
+# CUSTOM DOMAIN CONFIGURATION (only used when domain=custom)
+# ============================================================================
+# custom_domain_name	My Research Area
+# custom_domain_description	Multi-omics analysis for my research
+# custom_domain_expert_role	bioinformatics expert specializing in my field
+# custom_domain_research_focus	identifying biomarkers and mechanisms
+# custom_domain_feature_suffix	my disease
+# custom_domain_collection	my_findings
+# custom_domain_db_path	data/my_literature_db
+# custom_domain_archive_pattern	my_literature_db
+# custom_domain_summary_title	My Analysis Summary
+# custom_domain_summary_subtitle	Biomarker Discovery
+# custom_domain_context_queries	query1,query2,query3
+
+# ============================================================================
+# LLM MODEL CONFIGURATION
+# ============================================================================
 # Set to "auto" or leave commented out for automatic hardware-based selection
 # The plugin will:
 #   1. Detect your CPU, RAM, and GPU (NVIDIA/AMD/Apple Silicon)
@@ -29,10 +61,21 @@ model_name	auto
 temperature	0.3
 max_tokens	1024
 
-# RAG (Retrieval-Augmented Generation) settings
-# The database will be auto-downloaded from GitHub if not present
+# ============================================================================
+# RAG (Retrieval-Augmented Generation) SETTINGS
+# ============================================================================
+# Enable RAG to augment summaries with literature findings
 use_rag	true
-literature_db	data/pd_literature_db
+
+# Path to literature vector database
+# Default is determined by domain (e.g., data/pd_literature_db for parkinsons)
+# Uncomment to override:
+# literature_db	data/pd_literature_db
+
+# Collection name within the database
+# Default is determined by domain (e.g., pd_findings for parkinsons)
+# Uncomment to override:
+# rag_collection	pd_findings
 
 # Auto-download RAG database from GitHub releases if not present
 rag_auto_download	true
